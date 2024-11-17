@@ -1,0 +1,815 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+Exam in LING310 AUTUMN 2024
+Appendix to "Platonic Trials"
+Candidate 107
+
+Code on the basis of "Topic Modelling", chapter 6, from Text Mining with R, by Julia Silge and David Robinson, 2017. 
+
+
+```{r}
+library(tidyverse)
+library(tidytext) 
+library(tidymodels) 
+library(tidylo)
+library(gutenbergr)
+library(topicmodels)
+library(stopwords) 
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(scales)
+library(tm)
+```
+
+
+
+Altering stop word list: 
+```{r}
+#removing from the set: 
+fixedstopwrds <- stopwords("en")
+words_to_remove <- c("doing", "being")
+fixedstopwrds2 <- setdiff(fixedstopwrds, words_to_remove)
+fixedstopwrds <- data.frame(word = fixedstopwrds2)
+
+#adding to stop words after checking the preliminary results: 
+words_to_add <- data.frame(word = c("yes", "one", "said", "replied", "let", "shall", "also", "can", "us", "may", "say", "will", "must", "like", "every")) #"now", "whether", "thing", "things"))
+#words_to_add <- data.frame(word = c("yes", "one", "said", "replied", "let", "shall"))
+#Alternate stop word list
+
+#removing duplicates: 
+fixedstopwrdsfinal <- rbind(fixedstopwrds, words_to_add)
+fixedstopwrdsfinal <- fixedstopwrdsfinal %>% distinct(word)
+
+```
+          
+          
+          ***THE DIALOGUES***
+          
+
+STATECRAFT: The Republic ~51k tokens after preprocessing
+```{r}
+TheRep <- gutenberg_download(1497)
+Republic <- TheRep[-c(1:8571), ]%>%
+  unnest_tokens(word, text) %>%
+  anti_join(fixedstopwrdsfinal, by = "word")
+```
+
+STATECRAFT: Laws ~63k 
+```{r}
+Laws <- gutenberg_download(1750)
+TheLaws <- Laws[-c(1:8374), ]%>%
+  unnest_tokens(word, text) %>%
+  anti_join(fixedstopwrdsfinal, by = "word")
+```
+
+LOVE: Phaedrus & Symposium ~20k tokens 
+```{r}
+books <- gutenberg_download(c(1600, 1636))
+#1600 = Symposium, 1636 = Phaedrus, both dialogues about love, both featuring Socrates and Phaedrus
+
+#Symposium starts at line 940, Phaedrus at 3309
+bookie_delet1 <- books[-c(1:937, 1959:3309), ]
+#such that we delete the lengthy intros written for both works by the translator, 
+#as they are not the focus of this task.
+
+PhaedruSymposium <- bookie_delet1 %>% 
+  unnest_tokens(word, text) %>%
+  anti_join(fixedstopwrdsfinal, by = "word")
+# both texts split by words and tokenized with removed stop words
+```
+
+RHETORIC: Gorgias ~14k 
+```{r}
+Gorgias <- gutenberg_download((1672), meta_fields = "title")
+Gorgiaser <- Gorgias[-c(1:2125), ]%>%
+  unnest_tokens(word, text) %>%
+  anti_join(fixedstopwrdsfinal, by = "word")
+```
+
+EPISTEMOLOGY: Theaetetus ~12k 
+```{r}
+Theaetetus  <- gutenberg_download((1726), meta_fields = "title")
+Theatetuser <- Theaetetus [-c(1:3083), ]%>%
+  unnest_tokens(word, text) %>%
+  anti_join(fixedstopwrdsfinal, by = "word")
+```
+
+
+    ----------------THE ANALYSIS----------------
+    ***TRIAL I: The Republic and Laws***
+  
+```{r}
+#Binding the altered books:
+RepublicVSLaws <- bind_rows(Republic, TheLaws) %>%
+  rename(Title = gutenberg_id)
+RepublicVSLaws$Title <- as.character(RepublicVSLaws$Title)
+RepublicVSLaws[RepublicVSLaws == '1750'] <- 'Laws'
+RepublicVSLaws[RepublicVSLaws == '1497'] <- 'The Republic'
+
+#Binding Laws and The Republic together. gutenberg_id transformed to character, then renamed to corresponding title
+
+```
+
+    TRIAL I: Beta
+```{r}
+dtm_df <- RepublicVSLaws %>%
+  count(Title, word) %>%
+  cast_dtm(Title, word, n)  
+#Making a DTM where rows are books (documents) and columns are words
+
+RvsL_lda <- LDA(dtm_df, k = 2, control = list(seed = 1234))
+#Setting topics to two, to see whether they correspond to the documents
+
+RvsL_topics <- tidy(RvsL_lda, matrix = "beta")
+
+RnLtop <- RvsL_topics %>%
+  slice_max(beta, n = 10, by = topic)%>%
+  arrange(topic, -beta)
+#Looking at top 10 terms
+
+RnLtop
+```
+
+    Trial I: Beta plotting: 
+```{r}
+RnLtop %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(.~ paste("Topic", topic), scales = "free") +
+  scale_y_reordered() +
+  theme_minimal(base_size = 16)
+```
+```{r}
+beta_wide <- RvsL_topics %>%
+  mutate(topic = paste0("topic", topic)) %>%
+  pivot_wider(names_from = topic, values_from = beta) %>%
+  filter(topic1 > .001 | topic2 > .001) %>%
+  mutate(log_ratio = log2(topic2 / topic1))
+#Looking at the most extreme values 
+beta_wide
+```
+```{r}
+beta_wide %>%
+  mutate(abs_ratio = abs(log_ratio)) %>%
+  arrange(desc(abs_ratio)) %>%
+  slice_head(n = 20) %>%
+  ggplot() +
+  geom_col(aes(x=fct_reorder(term, log_ratio), y=log_ratio)) +
+  coord_flip() +
+  labs(x="") +
+  theme_light()
+#Plotting the most extreme values 
+```
+    
+    
+    Trial I: Gamma
+```{r}
+RvsL_doc <- tidy(RvsL_lda, matrix = "gamma")
+
+RvsL_doc
+```
+    Trial I: plotting gamma:
+```{r}
+RvsL_doc %>%
+  pivot_wider(names_from = topic, values_from = gamma) %>%
+  mutate(ratio = `1`/`2`) %>%
+  pivot_longer(c(`1`,`2`), names_to = "topic") %>%
+  ggplot() +
+  geom_col(aes(x=document, y=value, fill=topic)) +
+  theme_minimal(base_size=15)
+
+```
+
+
+    Trial I: Analysis by chapter 
+```{r}
+RepLaw <- tibble(gutenberg_id=c(1497, 1750))
+#redownloading to make coding and cutting down easier later
+
+boonks <- RepLaw %>%
+  gutenberg_download(
+    meta_fields = "title")
+
+by_chapter <- boonks %>%
+  left_join(select(gutenberg_works(), title, gutenberg_id)) %>% 
+  mutate(chapter = cumsum(str_detect(
+    text, regex("^book |^[DMCLXVI]+\\. ", ignore_case = TRUE) 
+  )), .by = title) %>%
+  filter(chapter > 0) %>%
+  mutate(chapter = str_pad(chapter, width = 2, pad = "0")) %>%
+  unite(document, title, chapter) 
+#finding the "chapters, in this case "booK" followed by a roman numeral 
+
+Buuks <- by_chapter [-c(1:8477), ] 
+Bookalos <- Buuks [-c(15964:24245), ]
+#cutting down intros
+
+by_chapter_word <- Bookalos %>%
+  unnest_tokens(word, text)
+#unnesting
+
+```
+
+```{r}
+word_counts <- by_chapter_word %>%
+  anti_join(stop_words) %>%
+  count(document, word, sort = TRUE)
+#for each word in each chapter ("document") 
+```
+
+```{r}
+chapters_dtm <- word_counts %>%
+  cast_dtm(document = document , term = word, value = n)
+#making DTM format from previous "word_counts" 
+
+chapters_lda <- LDA(chapters_dtm, k = 2, control = list(seed = 1234))
+#2 topics for two books
+
+chapter_topics <- tidy(chapters_lda, matrix = "beta")
+#Tidying
+
+top_terms <- chapter_topics %>%
+  slice_max(beta, n = 5, by = topic) %>%
+  arrange(topic, -beta)
+
+top_terms
+```
+    Trial I: Plotting the chapter analysis
+```{r}
+top_terms %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(.~ topic, scales = "free") +
+  scale_y_reordered() +
+  theme_minimal(base_size=15)
+```
+
+```{r}
+chapters_gamma <- tidy(chapters_lda, matrix = "gamma")
+
+chapters_gamma <- chapters_gamma %>%
+  separate(document, c("title", "chapter"), sep = "_", convert = TRUE)
+#separating title and chapter
+
+chapters_gamma
+```
+
+```{r}
+chapters_gamma %>%
+  arrange(title, chapter) %>%
+  mutate(title = reorder(title, gamma * topic)) %>% 
+  ggplot(aes(factor(topic), gamma)) +
+  geom_boxplot() +
+  facet_wrap(.~ title) +
+  labs(x = "topic", y = expression(gamma)) +
+  theme_light()
+#probability of a given chapter belonging to a book (topic here)
+```
+```{r}
+chapter_classifications <- chapters_gamma %>%
+  slice_max(gamma, by = c(title, chapter)) 
+chapter_classifications
+#for each chapter, how much does it belong to a topic? 
+```
+```{r}
+#checking misclassified terms
+book_topics <- chapter_classifications %>%
+  count(title, topic) %>%
+  slice_max(n, n = 1, by = title) %>%
+  rename("prediction" = title) %>%
+  select(-n)
+
+chapter_classifications %>%
+  inner_join(book_topics, by = join_by(topic)) %>% 
+  filter(title != prediction)
+
+assignments <- augment(chapters_lda, data = chapters_dtm)
+
+assignments <- assignments %>% 
+  separate(document, c("title", "chapter"), 
+           sep = "_", convert = TRUE) %>%
+  inner_join(book_topics, by = join_by(".topic" == "topic"))
+
+assignments
+```
+
+```{r}
+#Confusion matrix
+assignments %>%
+  count(title, prediction, wt = count) %>%
+  mutate(across(c(title, prediction), ~str_wrap(., 10))) %>%
+  mutate(percent = n / sum(n), .by = title) |> 
+  ggplot(aes(prediction, title, fill = percent)) +
+  geom_tile() +
+  scale_fill_gradient2(high = "darkred", label = percent_format()) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        panel.grid = element_blank()) +
+  labs(x = "Book words were assigned to",
+       y = "Book words came from",
+       fill = "% of assignments") +
+  coord_equal() +
+  theme_light(base_size = 14)
+?percent_format()
+```
+```{r}
+wrong_words <- assignments %>%
+  filter(title != prediction)
+
+wrong_words
+```
+
+```{r}
+wrong_words %>%
+  count(title, prediction, term, wt = count) %>%
+  arrange(desc(n))
+
+Bookalos %>%
+  unnest_tokens(word, text) %>%
+  count(document, sort = T)
+
+wrong_words %>%
+  count(term) %>%
+  filter(n==1)
+```
+  Trial I: Looking at the mean values of multiple runs 
+
+```{r}
+meaningful_lda <- function(dtm_df, seed) {
+  total_lda <- LDA(dtm_df, k = 2, control = list(seed = seed))
+
+  lda_beta <- tidy(total_lda, matrix = "beta")
+  lda_gamma <- tidy(total_lda, matrix = "gamma")
+#Extracting both beta and gamma from the LDA
+  
+  lda_beta$seed <- seed
+  lda_gamma$seed <- seed
+#Adding seed info as columns 
+  
+  list(beta = lda_beta, gamma = lda_gamma)
+#Listing both results in a list
+}
+#With help from ChatGPT 
+
+num_runs <- 100
+seeds <- sample(1:9999, num_runs)
+#Setting the amount of runs and set of random seeds
+
+results_list <- lapply(seeds, function(seed) meaningful_lda(dtm_df, seed))
+
+
+all_beta_results <- bind_rows(lapply(results_list, `[[`, "beta"))
+all_gamma_results <- bind_rows(lapply(results_list, `[[`, "gamma"))
+#combining results from both beta and gamma 
+
+mean_gamma_results <- all_gamma_results %>%
+  group_by(document, topic) %>%
+  summarise(mean_gamma = mean(gamma), .groups = 'drop')
+#calculating the mean gamma for each document-topic pair across all runs
+mean_gamma_results
+
+mean_gamma_results %>%
+  pivot_wider(names_from = topic, values_from = mean_gamma) %>%
+  mutate(ratio = `1`/`2`) %>%
+  pivot_longer(c(`1`,`2`), names_to = "topic") %>%
+  ggplot() +
+  geom_col(aes(x=document, y=value, fill=topic)) +
+  theme_minimal(base_size=15)
+```
+
+
+
+
+    ***TRIAL II: Symposium & Phaedrus and Laws*** 
+```{r}
+LawsCut <- TheLaws [-c(18793:57408),]
+#cutting down the length of Laws to fit with Phaedrus and Symposium, in this instance, to the same number of tokens Phaedrus and Symposium have when combined.
+
+
+LawsvsPhaeSym <- bind_rows(PhaedruSymposium, LawsCut) %>%
+  rename(Title = gutenberg_id)
+LawsvsPhaeSym$Title <- as.character(LawsvsPhaeSym$Title)
+LawsvsPhaeSym[LawsvsPhaeSym == '1750'] <- 'Laws'
+LawsvsPhaeSym[LawsvsPhaeSym == '1600'] <- 'Phae&Sym'
+LawsvsPhaeSym[LawsvsPhaeSym == '1636'] <- 'Phae&Sym'
+```
+
+```{r}
+PSvsL <- LawsvsPhaeSym%>%
+  count(Title, word)%>%
+  bind_log_odds(Title, word, n)
+
+PSvsL
+```
+    TRIAL II: Beta
+```{r}
+PSLBetaDTM <- LawsvsPhaeSym %>%
+  count(Title, word) %>%
+  cast_dtm(Title, word, n)  
+
+PSL_lda <- LDA(PSLBetaDTM, k = 2, control = list(seed = 1234))#3245
+
+PSL_topics <- tidy(PSL_lda, matrix = "beta")
+
+PSLtop <- PSL_topics %>%
+  slice_max(beta, n = 12, by = topic)%>%
+  arrange(topic, -beta)
+PSLtop
+```
+    Trial II: plotting beta 
+```{r}
+PSLtop %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(.~ paste("Topic", topic), scales = "free") +
+  scale_y_reordered() +
+  theme_minimal(base_size = 16)
+```
+
+```{r}
+beta_wide2 <- PSL_topics %>%
+  mutate(topic = paste0("topic", topic)) %>%
+  pivot_wider(names_from = topic, values_from = beta) %>%
+  filter(topic1 > .001 | topic2 > .001) %>%
+  mutate(log_ratio = log2(topic2 / topic1))
+```
+
+```{r}
+beta_wide2 %>%
+  mutate(abs_ratio = abs(log_ratio)) %>%
+  arrange(desc(abs_ratio)) %>%
+  slice_head(n = 20) %>%
+  ggplot() +
+  geom_col(aes(x=fct_reorder(term, log_ratio), y=log_ratio)) +
+  coord_flip() +
+  labs(x="") +
+  theme_light()
+```
+
+    Trial II: Gamma 
+```{r}
+PSL_doc <- tidy(PSL_lda, matrix = "gamma")
+
+PSL_doc
+```
+    Trial II: Plotting gamma
+```{r}
+PSL_doc %>%
+  pivot_wider(names_from = topic, values_from = gamma) %>%
+  mutate(ratio = `1`/`2`) %>%
+  pivot_longer(c(`1`,`2`), names_to = "topic") %>%
+  ggplot() +
+  geom_col(aes(x=document, y=value, fill=topic)) +
+  theme_minimal(base_size=15)
+
+```
+    Trial II: Mean of gamma
+```{r}
+phaelaw_lda <- function(PSLBetaDTM, seed) {
+  total_lda <- LDA(PSLBetaDTM, k = 2, control = list(seed = seed))
+
+  lda2_beta <- tidy(total_lda, matrix = "beta")
+  lda2_gamma <- tidy(total_lda, matrix = "gamma")
+  
+  lda2_beta$seed <- seed
+  lda2_gamma$seed <- seed
+  
+  list(beta = lda2_beta, gamma = lda2_gamma)
+}
+
+num_runs <- 80
+seeds <- sample(1:1000, num_runs)
+
+results2_list <- lapply(seeds, function(seed) phaelaw_lda(PSLBetaDTM, seed))
+
+all2_beta_results <- bind_rows(lapply(results2_list, `[[`, "beta"))
+all2_gamma_results <- bind_rows(lapply(results2_list, `[[`, "gamma"))
+
+mean2_gamma_results <- all2_gamma_results %>%
+  group_by(document, topic) %>%
+  summarise(mean_gamma = mean(gamma), .groups = 'drop')
+mean2_gamma_results
+
+mean2_gamma_results %>%
+  pivot_wider(names_from = topic, values_from = mean_gamma) %>%
+  mutate(ratio = `1`/`2`) %>%
+  pivot_longer(c(`1`,`2`), names_to = "topic") %>%
+  ggplot() +
+  geom_col(aes(x=document, y=value, fill=topic)) +
+  theme_minimal(base_size=15)
+```
+
+
+
+    ***TRIAL III: Theaetetus vs Gorgias***
+```{r}
+GvT <- bind_rows(Theatetuser, Gorgiaser) %>%
+  rename(Title = gutenberg_id)
+GvT$Title <- as.character(GvT$Title)
+GvT[GvT == '1726'] <- 'Theaetetus'
+GvT[GvT == '1672'] <- 'Gorgias'
+
+GVT_df <- GvT %>%
+  count(Title, word) %>%
+  cast_dtm(Title, word, n)  
+```
+    Trial III: Beta
+```{r}
+
+GVT_lda <- LDA(GVT_df, k = 2, control = list(seed = 1234))
+
+GVT_topics <- tidy(GVT_lda, matrix = "beta")
+
+GVTtop <- GVT_topics %>%
+  slice_max(beta, n = 10, by = topic)%>%
+  arrange(topic, -beta)
+
+```
+    Trial III: Plotting beta 
+```{r}
+GVTtop %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(.~ paste("Topic", topic), scales = "free") +
+  scale_y_reordered() +
+  theme_minimal(base_size = 16)
+```
+
+```{r}
+BT_GVT <- GVT_topics %>%
+  mutate(topic = paste0("topic", topic)) %>%
+  pivot_wider(names_from = topic, values_from = beta) %>%
+  filter(topic1 > .001 | topic2 > .001) %>%
+  mutate(log_ratio = log2(topic2 / topic1))
+
+BT_GVT %>%
+  mutate(abs_ratio = abs(log_ratio)) %>%
+  arrange(desc(abs_ratio)) %>%
+  slice_head(n = 40) %>%
+  ggplot() +
+  geom_col(aes(x=fct_reorder(term, log_ratio), y=log_ratio)) +
+  coord_flip() +
+  labs(x="") +
+  theme_light()
+#Choosing 40 to show the sudden drop-off
+```
+    Trial III: Gamma 
+```{r}
+GVT_doc <- tidy(GVT_lda, matrix = "gamma")
+
+GVT_doc
+```
+    Trial III: Plotting gamma 
+```{r}
+GVT_doc %>%
+  pivot_wider(names_from = topic, values_from = gamma) %>%
+  mutate(ratio = `1`/`2`) %>%
+  pivot_longer(c(`1`,`2`), names_to = "topic") %>%
+  ggplot() +
+  geom_col(aes(x=document, y=value, fill=topic)) +
+  theme_minimal(base_size=15)
+```
+
+
+
+    Trial III: Deleting Socrates & co.
+```{r}
+#words_to_add_specia_extraspecial <- data.frame(word = c("yes", "one", "said", "replied", "let", "shall", "also", "can", "us", "may", "say", "will", "socrates"))
+#Alternatively: 
+words_to_add_specia_extraspecial <- data.frame(word = c("yes", "one", "said", "replied", "let", "shall", "also", "can", "us", "may", "say", "will", "socrates", "theaetetus", "callicles", "gorgias"))
+
+#removing duplicates: 
+antisocstopwords <- rbind(fixedstopwrds, words_to_add_specia_extraspecial)
+antisocstopwords <- antisocstopwords %>% distinct(word)
+```
+```{r}
+Gorgias <- gutenberg_download((1672), meta_fields = "title")
+Gorgiaser <- Gorgias[-c(1:2125), ]%>%
+  unnest_tokens(word, text) %>%
+  anti_join(antisocstopwords, by = "word")
+```
+```{r}
+Theaetetus  <- gutenberg_download((1726), meta_fields = "title")
+Theatetuser <- Theaetetus [-c(1:3083), ]%>%
+  unnest_tokens(word, text) %>%
+  anti_join(antisocstopwords, by = "word")
+```
+    
+```{r}
+AntisocGT <- bind_rows(Theatetuser, Gorgiaser) %>%
+  rename(Title = gutenberg_id)
+AntisocGT$Title <- as.character(AntisocGT$Title)
+AntisocGT[AntisocGT == '1726'] <- 'Theaetetus'
+AntisocGT[AntisocGT == '1672'] <- 'Gorgias'
+
+AntisocGT_df <- AntisocGT %>%
+  count(Title, word) %>%
+  cast_dtm(Title, word, n)  
+```
+    Trial III: Beta W/o Socretes
+```{r}
+AntiGT_lda <- LDA(AntisocGT_df, k = 2, control = list(seed = 1234))
+
+AntiGT_topics <- tidy(AntiGT_lda, matrix = "beta")
+
+AntiGTtop <- AntiGT_topics %>%
+  slice_max(beta, n = 10, by = topic)%>%
+  arrange(topic, -beta)
+
+```
+    Trial III: Plotting beta W/o Socretes
+```{r}
+AntiGTtop %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(.~ paste("Topic", topic), scales = "free") +
+  scale_y_reordered() +
+  theme_minimal(base_size = 16)
+```
+
+```{r}
+WideAntiGT <- AntiGT_topics %>%
+  mutate(topic = paste0("topic", topic)) %>%
+  pivot_wider(names_from = topic, values_from = beta) %>%
+  filter(topic1 > .001 | topic2 > .001) %>%
+  mutate(log_ratio = log2(topic2 / topic1))
+
+WideAntiGT %>%
+  mutate(abs_ratio = abs(log_ratio)) %>%
+  arrange(desc(abs_ratio)) %>%
+  slice_head(n = 20) %>%
+  ggplot() +
+  geom_col(aes(x=fct_reorder(term, log_ratio), y=log_ratio)) +
+  coord_flip() +
+  labs(x="") +
+  theme_light()
+```
+
+```{r}
+WideAntiGT
+```
+
+    Trial III: Gamma  W/o Socretes
+```{r}
+AntiGT_DOC <- tidy(AntiGT_lda, matrix = "gamma")
+
+AntiGT_DOC
+```
+    Trial III: Plotting gamma  W/o Socretes
+```{r}
+AntiGT_DOC %>%
+  pivot_wider(names_from = topic, values_from = gamma) %>%
+  mutate(ratio = `1`/`2`) %>%
+  pivot_longer(c(`1`,`2`), names_to = "topic") %>%
+  ggplot() +
+  geom_col(aes(x=document, y=value, fill=topic)) +
+  theme_minimal(base_size=15)
+```
+
+    Trial III: mean gamma (with Socrates)
+```{r}
+meanIII <- function(GVT_df, seed) {
+  total_lda <- LDA(GVT_df, k = 2, control = list(seed = seed))
+
+  lda_beta <- tidy(total_lda, matrix = "beta")
+  lda_gamma <- tidy(total_lda, matrix = "gamma")
+  
+  lda_beta$seed <- seed
+  lda_gamma$seed <- seed
+  
+  list(beta = lda_beta, gamma = lda_gamma)
+}
+
+
+num_runs <- 31
+seeds <- sample(1:9999, num_runs)
+
+results_list <- lapply(seeds, function(seed) meanIII(GVT_df, seed))
+
+
+all_beta_results <- bind_rows(lapply(results_list, `[[`, "beta"))
+all_gamma_results <- bind_rows(lapply(results_list, `[[`, "gamma"))
+
+mean_gamma_results <- all_gamma_results %>%
+  group_by(document, topic) %>%
+  summarise(mean_gamma = mean(gamma), .groups = 'drop')
+
+mean_gamma_results %>%
+  pivot_wider(names_from = topic, values_from = mean_gamma) %>%
+  mutate(ratio = `1`/`2`) %>%
+  pivot_longer(c(`1`,`2`), names_to = "topic") %>%
+  ggplot() +
+  geom_col(aes(x=document, y=value, fill=topic)) +
+  theme_minimal(base_size=15)
+```
+    ***FURTHER INVESTIGATION***
+    Trial I and II across iterations 
+```{r}
+#Republic and Laws across iterations 
+rvltry <- LDA(dtm_df, k = 2, iterations = 100)
+rvl_topics <- tidy(rvltry, matrix = "beta")
+rvltop <- rvl_topics %>%
+  slice_max(beta, n = 10, by = topic)%>%
+  arrange(topic, -beta)
+rvltop
+rvltop %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(.~ paste("Topic", topic), scales = "free") +
+  scale_y_reordered() +
+  theme_minimal(base_size = 16)
+
+rvldoc <- tidy(rvltry, matrix = "gamma")
+rvldoc
+```
+```{r}
+#Laws and Phaedrus+Symposium across iterations 
+psltry <- LawsvsPhaeSym %>%
+  count(Title, word) %>%
+  cast_dtm(Title, word, n)  
+
+psltry_lda <- LDA(psltry, k = 2, iterations = 112)#3245
+
+psl_topics <- tidy(psltry_lda, matrix = "beta")
+
+
+psltop <- psl_topics %>%
+  slice_max(beta, n = 12, by = topic)%>%
+  arrange(topic, -beta)
+psltop
+psl_doc <- tidy(psltry_lda, matrix = "gamma")
+
+psl_doc
+```
+
+
+    Removing given names for trial I 
+```{r}
+yaku <- stopwords("en")
+words_to_remove <- c("doing", "being")
+totalyaku <- setdiff(yaku, words_to_remove)
+yaku <- data.frame(word = totalyaku)
+
+#adding all given names and additional stop words: 
+addage <- data.frame(word = c("yes", "one", "said", "replied", "let", "shall", "also", "can", "us", "may", "say", "will", "must", "another", "like", "every", "socrates", "athenian", "callicles", "theaetetus", "phaedrus", "cleinias", "megillus", "gorgias", "now", "whether", "thing", "things", "certainly", "many", "few", "first", "sort"))
+
+addagestop <- rbind(yaku, addage)
+addagestop <- addagestop %>% distinct(word)
+
+
+TheRep <- gutenberg_download(1497)
+republika <- TheRep[-c(1:8571), ]%>%
+  unnest_tokens(word, text) %>%
+  anti_join(addagestop, by = "word")
+
+
+Laws <- gutenberg_download(1750)
+prawa <- Laws[-c(1:8374), ]%>%
+  unnest_tokens(word, text) %>%
+  anti_join(addagestop, by = "word")
+
+repuprawa <- bind_rows(republika, prawa) %>%
+  rename(Title = gutenberg_id)
+repuprawa$Title <- as.character(repuprawa$Title)
+repuprawa[repuprawa == '1750'] <- 'Laws'
+repuprawa[repuprawa == '1497'] <- 'The Republic'
+
+
+repuprawaDF <- repuprawa %>%
+  count(Title, word) %>%
+  cast_dtm(Title, word, n)
+
+#repuLDA <- LDA(repuprawaDF, k = 2, control = list(seed = 25))
+repuLDA <- LDA(repuprawaDF, k = 2, iterations = 150)
+#of note: 6, 9, 15, 30, 40, iterations have 100-0% split
+#Setting topics to two, to see whether they correspond to the documents
+
+repuTOPIC <- tidy(repuLDA, matrix = "beta")
+
+topkarepu <- repuTOPIC %>%
+  slice_max(beta, n = 10, by = topic)%>%
+  arrange(topic, -beta)
+#Looking at top 10 terms
+
+topkarepu %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(.~ paste("Topic", topic), scales = "free") +
+  scale_y_reordered() +
+  theme_minimal(base_size = 16)
+
+repuDOC <- tidy(repuLDA, matrix = "gamma")
+
+repuDOC
+```
